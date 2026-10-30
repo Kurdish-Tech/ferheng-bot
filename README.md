@@ -25,9 +25,8 @@ node scripts/build-index.mjs --src ../kurdish-tech.github.io/public/data --out _
 node scripts/verify-index.mjs --src ../kurdish-tech.github.io/public/data --index _site
 python -m http.server 8790 --directory _site
 
-printf 'WEBHOOK_SECRET=testsecret
-DATA_BASE=http://127.0.0.1:8790
-' > .dev.vars
+echo WEBHOOK_SECRET=testsecret > .dev.vars
+echo DATA_BASE=http://127.0.0.1:8790 >> .dev.vars
 npx wrangler dev --port 8788   # in one terminal
 node tests/live.mjs            # in another: sends sample Telegram updates
 ```
