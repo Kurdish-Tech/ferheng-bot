@@ -3,6 +3,12 @@
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
+  // The lookup shards (built by `npm run build:data`) ship with the Worker as
+  // static assets, so a lookup is an in-process read: no network, no TLS.
+  "assets": {
+    "directory": "./_site",
+    "binding": "ASSETS"
+  },
   "kv_namespaces": [
     {
       "binding": "PREFS",
