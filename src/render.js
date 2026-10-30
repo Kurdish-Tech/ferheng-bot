@@ -7,7 +7,11 @@ export const MAX_MESSAGE = 3800; // Telegram caps messages at 4096 chars
 export const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const oneLine = (s) => String(s).replace(/\s+/g, ' ').trim();
+// Some dictionary glosses carry wiki maintenance notes like
+// ^([Ev rêz ji aliyê botê ve lê hatiye zêdekirin ...].) — not part of the meaning.
+const WIKI_NOTE_RE = /\^\(\[[^\]]*\]\.?\)/g;
+export const cleanGloss = (s) => String(s).replace(WIKI_NOTE_RE, '').replace(/\s+/g, ' ').trim();
+const oneLine = cleanGloss;
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
 /** Telegram allows 64 bytes of callback data; return null if it does not fit. */

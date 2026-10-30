@@ -1,0 +1,61 @@
+name: Build lookup index and deploy to Pages
+
+# Rebuilds the small-shard index from the Ferheng dictionary data and publishes
+# it with GitHub Pages (https://kurdish-tech.github.io/ferheng-bot/), which is
+# where the Worker reads from. Runs on every push, weekly (to pick up dictionary
+# updates) and on demand.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the dictionary data
+        uses: actions/checkout@v4
+        with:
+          repository: Kurdish-Tech/kurdish-tech.github.io
+          path: site
+          sparse-checkout: public/data
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the index
+        run: node scripts/build-index.mjs --src site/public/data --out _site
+
+      - name: Verify every word against the source data
+        run: node scripts/verify-index.mjs --src site/public/data --index _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

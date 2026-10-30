@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderWord, renderArabicList, renderNotFound, cbData, escapeHtml } from '../src/render.js';
+import { renderWord, renderArabicList, renderNotFound, cbData, escapeHtml, cleanGloss } from '../src/render.js';
 import { decideUi } from '../src/prefs.js';
 import { accentVariants, hasKurdishLetters } from '../src/lookup.js';
 
@@ -92,4 +92,9 @@ test('Kurdish-only Arabic-script letters are detected', () => {
   assert.equal(hasKurdishLetters('ئاو'), false);
   assert.equal(hasKurdishLetters('کوردی'), true);
   assert.equal(hasKurdishLetters('ماء'), false);
+});
+
+test('wiki maintenance notes are removed from glosses', () => {
+  assert.equal(cleanGloss('sistî, xavî^([Ev rêz ji aliyê botê ve lê hatiye zêdekirin, kontrol bike!].)'), 'sistî, xavî');
+  assert.equal(cleanGloss('a  b' + String.fromCharCode(10) + 'c'), 'a b c');
 });

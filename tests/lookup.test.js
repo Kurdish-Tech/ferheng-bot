@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  extractEntries, extractReverse, stripArabicDiacritics, toSoraniLetters, partOverlapsPrefix,
+  extractEntries, extractReverse, stripArabicDiacritics, toSoraniLetters,
 } from '../src/lookup.js';
 
 const SHARD =
@@ -35,8 +35,36 @@ test('Arabic helpers', () => {
   assert.equal(toSoraniLetters('كردي'), 'کردی');
 });
 
-test('partOverlapsPrefix keeps only shards whose range can contain the word', () => {
-  const part = { first: 'b', last: 'berwesêla' };
-  assert.equal(partOverlapsPrefix(part, 'ba'), true);
-  assert.equal(partOverlapsPrefix(part, 'bi'), false);
+import { splitIntoShards, shardKey, hexName } from '../src/shards.js';
+
+const item = (word, bytes = 10) => ({ chars: Array.from(word.toLowerCase()), bytes, word });
+
+test('hexName is file-safe and reversible by code point', () => {
+  assert.equal(hexName('ab'), '61-62');
+  assert.equal(hexName('û'), 'fb');
+  assert.match(hexName('a/b?'), /^[0-9a-f-]+$/);
+});
+
+test('every word is found in exactly the shard shardKey points to, including exact-prefix words', () => {
+  const words = ['a', 'ab', 'aba', 'abb', 'abc', 'abd', 'b', 'bi', 'Bin', 'avî', 'avê'];
+  const items = words.map((w) => item(w, 40));
+  const shards = splitIntoShards(items, { limit: 100, maxPrefix: 4 });
+  const prefixes = new Set(shards.keys());
+  assert.ok(shards.size > 1);
+  for (const w of words) {
+    const key = shardKey(prefixes, 4, w);
+    assert.ok(key, `no shard for ${w}`);
+    assert.ok(shards.get(key).some((it) => it.word === w), `${w} missing from shard ${key}`);
+  }
+  assert.equal(shardKey(prefixes, 4, 'zzz'), null);
+});
+
+test('shards stay under the limit when a split is possible', () => {
+  const items = Array.from({ length: 200 }, (_, i) => item(`k${String.fromCharCode(97 + (i % 26))}${i}`, 50));
+  const shards = splitIntoShards(items, { limit: 600, maxPrefix: 6 });
+  for (const group of shards.values()) {
+    const size = group.reduce((n, it) => n + it.bytes + 1, 2);
+    assert.ok(size <= 600 || group[0].chars.length >= 6);
+  }
+  assert.equal([...shards.values()].flat().length, 200);
 });

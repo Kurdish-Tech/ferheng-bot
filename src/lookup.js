@@ -1,17 +1,24 @@
-// Dictionary lookups straight against the published Ferheng data files.
+// Dictionary lookups against small pre-split shards (see src/shards.js).
 //
-// The data shards are minified JSON arrays of up to ~1.8MB. Workers on the
-// free plan get ~10ms of CPU per request, so parsing a whole shard is out;
-// instead we search the raw text and only JSON.parse the few entries found.
-// That is safe because every entry starts with `{"word":"` and a literal
-// `"word":"` can't occur inside a JSON string (its quotes would be escaped).
-import { DATA_BASE, candidateLetters } from './config.js';
+// Workers on the free plan get ~10ms of CPU per request, so a lookup must
+// not decode or parse much data: each shard is at most ~120KB, and we search
+// its raw text, JSON.parse-ing only the few entries found. That is safe
+// because every entry starts with `{"word":"` and a literal `"word":"` can't
+// occur inside a JSON string (its quotes would be escaped).
+import { DEFAULT_DATA_BASE } from './config.js';
+import { shardKey, hexName } from './shards.js';
+
+let dataBase = DEFAULT_DATA_BASE;
+export function configure(env) {
+  if (env?.DATA_BASE) dataBase = String(env.DATA_BASE).replace(/\/+$/, '');
+}
 
 const textMemo = new Map();
-const MEMO_LIMIT = 8;
-const indexMemo = new Map();
+const MEMO_LIMIT = 30;
+const manifestMemo = new Map();
 
-async function fetchText(url) {
+async function fetchText(path) {
+  const url = `${dataBase}/${path}`;
   const hit = textMemo.get(url);
   if (hit !== undefined) {
     textMemo.delete(url);
@@ -19,35 +26,27 @@ async function fetchText(url) {
     return hit;
   }
   const res = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
+  if (!res.ok) throw new Error(`${res.status} fetching ${path}`);
   const text = await res.text();
   textMemo.set(url, text);
   if (textMemo.size > MEMO_LIMIT) textMemo.delete(textMemo.keys().next().value);
   return text;
 }
 
-async function getIndex(dialectKey) {
-  if (indexMemo.has(dialectKey)) return indexMemo.get(dialectKey);
-  const idx = JSON.parse(await fetchText(`${DATA_BASE}/${dialectKey}/index.json`));
-  indexMemo.set(dialectKey, idx);
-  return idx;
+/** dir is 'ku' | 'sor' | 'zza' | 'ar'. */
+async function getManifest(dir) {
+  const hit = manifestMemo.get(`${dataBase}|${dir}`);
+  if (hit) return hit;
+  const raw = JSON.parse(await fetchText(`${dir}/index.json`));
+  const manifest = { prefixes: new Set(raw.prefixes), list: raw.prefixes, maxLen: raw.maxLen };
+  manifestMemo.set(`${dataBase}|${dir}`, manifest);
+  return manifest;
 }
 
-export function partOverlapsPrefix(part, prefix) {
-  const first = part.first.toLowerCase();
-  const last = part.last.toLowerCase();
-  return prefix <= last && prefix + '\uFFFF' >= first;
-}
-
-async function candidateParts(dialectKey, lower) {
-  const idx = await getIndex(dialectKey);
-  const parts = [];
-  for (const letter of candidateLetters(dialectKey, lower[0])) {
-    for (const part of idx.letters[letter] || []) {
-      if (partOverlapsPrefix(part, lower)) parts.push(part.file);
-    }
-  }
-  return parts;
+async function shardPath(dir, text) {
+  const m = await getManifest(dir);
+  const key = shardKey(m.prefixes, m.maxLen, text);
+  return key === null ? null : `${dir}/${hexName(key)}.json`;
 }
 
 /** All entries whose headword is exactly `word`, parsed from raw shard text. */
@@ -77,19 +76,17 @@ function caseVariants(word) {
 }
 
 export async function findEntries(dialectKey, word, { exactCase = false } = {}) {
-  const lower = word.toLowerCase();
-  const files = await candidateParts(dialectKey, lower);
-  const texts = await Promise.all(files.map((f) => fetchText(`${DATA_BASE}/${dialectKey}/${f}`)));
+  const path = await shardPath(dialectKey, word);
+  if (!path) return [];
+  const text = await fetchText(path);
   const seen = new Set();
   const found = [];
-  for (const text of texts) {
-    for (const variant of exactCase ? [lower] : caseVariants(word)) {
-      for (const entry of extractEntries(text, variant)) {
-        const key = `${entry.word}|${entry.pos}|${(entry.glosses || [])[0] || ''}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        found.push(entry);
-      }
+  for (const variant of exactCase ? [word.toLowerCase()] : caseVariants(word)) {
+    for (const entry of extractEntries(text, variant)) {
+      const key = `${entry.word}|${entry.pos}|${(entry.glosses || [])[0] || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(entry);
     }
   }
   return found;
@@ -98,11 +95,16 @@ export async function findEntries(dialectKey, word, { exactCase = false } = {}) 
 /** Up to `limit` distinct headwords starting with `prefix` ("did you mean"). */
 export async function suggestWords(dialectKey, prefix, limit = 5) {
   const lower = prefix.toLowerCase();
-  const files = await candidateParts(dialectKey, lower);
+  const m = await getManifest(dialectKey);
+  // Shards that can hold words starting with `lower`: those whose key is a
+  // prefix of it (longest first) and those that extend it (alphabetical).
+  const prefixes = m.list.filter((k) => lower.startsWith(k)).sort((a, b) => b.length - a.length);
+  const extensions = m.list.filter((k) => k.startsWith(lower) && k !== lower).sort();
+  const keys = [...new Set([...prefixes.slice(0, 1), ...(m.prefixes.has(lower) ? [lower] : []), ...extensions])].slice(0, 4);
   const needle = `{"word":${JSON.stringify(lower).slice(0, -1)}`;
   const words = new Set();
-  for (const f of files) {
-    const text = await fetchText(`${DATA_BASE}/${dialectKey}/${f}`);
+  for (const k of keys) {
+    const text = await fetchText(`${dialectKey}/${hexName(k)}.json`);
     let from = 0;
     while (words.size < limit) {
       const i = text.indexOf(needle, from);
@@ -118,15 +120,15 @@ export async function suggestWords(dialectKey, prefix, limit = 5) {
   return [...words];
 }
 
-const ARABIC_RE = /[\u0600-\u06FF]/;
+const ARABIC_RE = /[؀-ۿ]/;
 export const looksArabicScript = (s) => ARABIC_RE.test(s);
-export const stripArabicDiacritics = (s) => s.replace(/[\u064B-\u0652\u0670\u0640]/g, '').trim();
+export const stripArabicDiacritics = (s) => s.replace(/[ً-ْٰـ]/g, '').trim();
 
 /** Arabic typed on an Arabic keyboard -> the Kurdish/Persian letter forms Sorani uses. */
 export const toSoraniLetters = (s) =>
   s.replace(/[يى]/g, 'ی').replace(/ك/g, 'ک').replace(/ة/g, 'ە');
 
-/** Kurdish headwords whose Arabic equivalents include `arabicWord`. */
+/** Kurdish headwords whose Arabic equivalents include `key` (shard text is a JSON object body). */
 export function extractReverse(text, key) {
   const needle = `${JSON.stringify(key)}:[`;
   const i = text.indexOf(needle);
@@ -142,8 +144,9 @@ export function extractReverse(text, key) {
 
 export async function findArabicMatches(arabicWord) {
   const key = stripArabicDiacritics(arabicWord);
-  const text = await fetchText(`${DATA_BASE}/ar-reverse-index.json`);
-  return extractReverse(text, key);
+  const path = await shardPath('ar', key);
+  if (!path) return [];
+  return extractReverse(await fetchText(path), key);
 }
 
 // Letters Kurdish orthographies use that plain Arabic does not (Sorani-specific).
@@ -184,7 +187,7 @@ export function accentVariants(dialectKey, word) {
   return levels.filter(Boolean);
 }
 
-/** Exact lookup; if nothing matches, retry with accents restored. */
+/** Retry with accents restored (kurdi -> kurdî). `skipDirect` skips the plain lookup. */
 export async function findEntriesWithAccents(dialectKey, word, { skipDirect = false } = {}) {
   if (!skipDirect) {
     const direct = await findEntries(dialectKey, word);
@@ -200,15 +203,17 @@ export async function findEntriesWithAccents(dialectKey, word, { skipDirect = fa
 
 /** A random {d, w} from the Arabic reverse index — words that have an Arabic translation. */
 export async function randomTranslatedWord() {
-  const text = await fetchText(`${DATA_BASE}/ar-reverse-index.json`);
+  const m = await getManifest('ar');
   for (let attempt = 0; attempt < 5; attempt++) {
-    const start = Math.floor(Math.random() * Math.max(1, text.length - 200));
+    const prefix = m.list[Math.floor(Math.random() * m.list.length)];
+    const text = await fetchText(`ar/${hexName(prefix)}.json`);
+    const start = Math.floor(Math.random() * Math.max(1, text.length - 50));
     const i = text.indexOf('{"d":"', start);
     if (i === -1) continue;
     const j = text.indexOf('}', i);
     try {
-      const m = JSON.parse(text.slice(i, j + 1));
-      if (m.d && m.w) return m;
+      const pick = JSON.parse(text.slice(i, j + 1));
+      if (pick.d && pick.w) return pick;
     } catch {
       // try another position
     }

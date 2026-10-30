@@ -1,4 +1,5 @@
 import { handleUpdate } from './bot.js';
+import { configure } from './lookup.js';
 import { ERROR_TEXT } from './i18n.js';
 
 // Stops the button's loading spinner. Needs the bot token; if the secret is
@@ -28,6 +29,7 @@ export default {
       return new Response('Unauthorized', { status: 401 });
     }
 
+    configure(env);
     let update;
     try {
       update = await request.json();
