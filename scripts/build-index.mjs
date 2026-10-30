@@ -66,7 +66,10 @@ writeFileSync(join(out, '.nojekyll'), '');
 writeFileSync(
   join(out, 'index.html'),
   '<!doctype html><meta charset="utf-8"><title>Ferheng bot data</title>' +
-    '<p>Generated lookup shards for the Ferheng Telegram bot. ' +
-    'Source: <a href="https://kurdish-tech.github.io/">Kurdish-Tech Ferheng</a> (CC BY-SA 4.0).</p>'
+    '<p>Generated lookup shards for the Ferheng Telegram bot, derived from the ' +
+    '<a href="https://kurdish-tech.github.io/">Kurdish-Tech Ferheng dictionary</a> ' +
+    '(content from Wiktionary contributors).</p>' +
+    '<p>License: <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>. ' +
+    'Attribution: Wiktionary contributors and Kurdish-Tech. Share alike.</p>'
 );
 if (!existsSync(join(out, 'ku', 'index.json'))) process.exit(1);

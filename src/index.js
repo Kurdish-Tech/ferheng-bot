@@ -17,6 +17,18 @@ async function answerCallback(env, id) {
   }
 }
 
+// Compares two strings without leaking, through timing, how much of the secret matched:
+// both sides are hashed to equal-length digests and compared in constant time.
+async function secretMatches(given, expected) {
+  if (!given || !expected) return false;
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(given)),
+    crypto.subtle.digest('SHA-256', enc.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -25,7 +37,7 @@ export default {
       return new Response('Not found', { status: 404 });
     }
     const given = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
-    if (!env.WEBHOOK_SECRET || given !== env.WEBHOOK_SECRET) {
+    if (!(await secretMatches(given, env.WEBHOOK_SECRET))) {
       return new Response('Unauthorized', { status: 401 });
     }
 

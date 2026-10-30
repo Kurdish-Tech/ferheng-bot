@@ -127,6 +127,10 @@ export async function handleMessage(message, env = {}) {
   }
 }
 
+const VALID_DIALECTS = new Set(['ku', 'sor', 'zza']);
+const VALID_UI = new Set(['a', 'k', 'b']);
+const VALID_MODES = new Set(['s', 'f']);
+
 /** Button presses: v = open a word view, l = language choice, r = another random word. */
 export async function handleCallback(cb, env = {}) {
   const message = cb.message;
@@ -137,6 +141,9 @@ export async function handleCallback(cb, env = {}) {
   if (kind === 'v') {
     const [dialect, mode, ui, ...wordParts] = args;
     const word = wordParts.join('|');
+    if (!VALID_DIALECTS.has(dialect) || !VALID_MODES.has(mode) || !VALID_UI.has(ui) || !word) {
+      return { reply: null, answerId: cb.id };
+    }
     const groups = await groupsFor(word);
     if (!groups.length) return { reply: null, answerId: cb.id };
     return { reply: edit(message, renderWord({ dialect, groups, ui, full: mode === 'f' })), answerId: cb.id };
@@ -148,6 +155,7 @@ export async function handleCallback(cb, env = {}) {
     return { reply: edit(message, view), answerId: cb.id };
   }
   if (kind === 'r') {
+    if (!VALID_UI.has(args[0])) return { reply: null, answerId: cb.id };
     return { reply: edit(message, await randomWord(env, userId, args[0])), answerId: cb.id };
   }
   return { reply: null, answerId: cb.id };
