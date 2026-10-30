@@ -6,6 +6,7 @@
   "description": "Telegram dictionary bot for Kurmancî, Soranî and Zazakî, powered by the Kurdish-Tech Ferheng dictionary",
   "scripts": {
     "dev": "wrangler dev",
+    "build:data": "node scripts/build-index.mjs --out _site",
     "deploy": "wrangler deploy",
     "test": "node --test tests/*.test.js",
     "setup": "node scripts/setup.mjs"

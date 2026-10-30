@@ -1,15 +1,21 @@
 // Dictionary lookups against small pre-split shards (see src/shards.js).
 //
-// Workers on the free plan get ~10ms of CPU per request, so a lookup must
-// not decode or parse much data: each shard is at most ~120KB, and we search
-// its raw text, JSON.parse-ing only the few entries found. That is safe
-// because every entry starts with `{"word":"` and a literal `"word":"` can't
-// occur inside a JSON string (its quotes would be escaped).
+// Workers on the free plan get ~10ms of CPU per request, and a cold isolate
+// has no warm caches, so a lookup must not decode or parse much data: each
+// shard is at most ~120KB and we search its raw text, JSON.parse-ing only the
+// few entries found. That is safe because every entry starts with
+// `{"word":"` and a literal `"word":"` can't occur inside a JSON string (its
+// quotes would be escaped). The list of shard prefixes is searched as text too.
 import { DEFAULT_DATA_BASE } from './config.js';
-import { shardKey, hexName } from './shards.js';
+import { shardKey, hexName, MAX_PREFIX } from './shards.js';
 
 let dataBase = DEFAULT_DATA_BASE;
+let assets = null;
+// Preferred: the shards ship inside the Worker as static assets (env.ASSETS), so
+// a lookup is an in-process read with no network or TLS. DATA_BASE (an HTTP
+// mirror, e.g. GitHub Pages) is the fallback when no assets binding exists.
 export function configure(env) {
+  assets = env?.ASSETS && !env.DATA_BASE ? env.ASSETS : null;
   if (env?.DATA_BASE) dataBase = String(env.DATA_BASE).replace(/\/+$/, '');
 }
 
@@ -25,7 +31,9 @@ async function fetchText(path) {
     textMemo.set(url, hit);
     return hit;
   }
-  const res = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  const res = assets
+    ? await assets.fetch(`https://assets.invalid/${path}`)
+    : await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
   if (!res.ok) throw new Error(`${res.status} fetching ${path}`);
   const text = await res.text();
   textMemo.set(url, text);
@@ -33,19 +41,24 @@ async function fetchText(path) {
   return text;
 }
 
-/** dir is 'ku' | 'sor' | 'zza' | 'ar'. */
+/**
+ * dir is 'ku' | 'sor' | 'zza' | 'ar'. The manifest is prefixes.txt: one shard
+ * prefix per line, wrapped in newlines, so membership is a plain substring
+ * search and nothing is parsed (the Kurmancî list has ~5,000 entries).
+ */
 async function getManifest(dir) {
-  const hit = manifestMemo.get(`${dataBase}|${dir}`);
+  const memoKey = `${dataBase}|${dir}`;
+  const hit = manifestMemo.get(memoKey);
   if (hit) return hit;
-  const raw = JSON.parse(await fetchText(`${dir}/index.json`));
-  const manifest = { prefixes: new Set(raw.prefixes), list: raw.prefixes, maxLen: raw.maxLen };
-  manifestMemo.set(`${dataBase}|${dir}`, manifest);
+  const text = await fetchText(`${dir}/prefixes.txt`);
+  const manifest = { text, has: (p) => text.includes(`\n${p}\n`), maxLen: MAX_PREFIX };
+  manifestMemo.set(memoKey, manifest);
   return manifest;
 }
 
 async function shardPath(dir, text) {
   const m = await getManifest(dir);
-  const key = shardKey(m.prefixes, m.maxLen, text);
+  const key = shardKey(m.has, m.maxLen, text);
   return key === null ? null : `${dir}/${hexName(key)}.json`;
 }
 
@@ -96,11 +109,26 @@ export async function findEntries(dialectKey, word, { exactCase = false } = {}) 
 export async function suggestWords(dialectKey, prefix, limit = 5) {
   const lower = prefix.toLowerCase();
   const m = await getManifest(dialectKey);
-  // Shards that can hold words starting with `lower`: those whose key is a
-  // prefix of it (longest first) and those that extend it (alphabetical).
-  const prefixes = m.list.filter((k) => lower.startsWith(k)).sort((a, b) => b.length - a.length);
-  const extensions = m.list.filter((k) => k.startsWith(lower) && k !== lower).sort();
-  const keys = [...new Set([...prefixes.slice(0, 1), ...(m.prefixes.has(lower) ? [lower] : []), ...extensions])].slice(0, 4);
+  // Shards that can hold words starting with `lower`: the one whose key is the
+  // longest prefix of it, then keys that extend it (the list is sorted).
+  const keys = [];
+  const chars = Array.from(lower);
+  for (let k = chars.length; k >= 1; k--) {
+    const p = chars.slice(0, k).join('');
+    if (m.has(p)) {
+      keys.push(p);
+      break;
+    }
+  }
+  const starts = `\n${lower}`;
+  for (let from = 0; keys.length < 4; ) {
+    const i = m.text.indexOf(starts, from);
+    if (i === -1) break;
+    const end = m.text.indexOf('\n', i + 1);
+    const k = m.text.slice(i + 1, end);
+    if (!keys.includes(k)) keys.push(k);
+    from = end;
+  }
   const needle = `{"word":${JSON.stringify(lower).slice(0, -1)}`;
   const words = new Set();
   for (const k of keys) {
@@ -204,8 +232,9 @@ export async function findEntriesWithAccents(dialectKey, word, { skipDirect = fa
 /** A random {d, w} from the Arabic reverse index — words that have an Arabic translation. */
 export async function randomTranslatedWord() {
   const m = await getManifest('ar');
+  const prefixes = m.text.split('\n').filter(Boolean);
   for (let attempt = 0; attempt < 5; attempt++) {
-    const prefix = m.list[Math.floor(Math.random() * m.list.length)];
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
     const text = await fetchText(`ar/${hexName(prefix)}.json`);
     const start = Math.floor(Math.random() * Math.max(1, text.length - 50));
     const i = text.indexOf('{"d":"', start);

@@ -5,7 +5,7 @@
 //   node scripts/verify-index.mjs --src <ferheng public/data> --index <built dir>
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { shardKey, hexName } from '../src/shards.js';
+import { shardKey, hexName, MAX_PREFIX } from '../src/shards.js';
 import { extractEntries, extractReverse } from '../src/lookup.js';
 
 const arg = (name) => {
@@ -19,20 +19,26 @@ if (!src || !index) {
   process.exit(1);
 }
 
+let failures = 0;
+const fail = (msg) => {
+  if (failures++ < 15) console.error('FAIL', msg);
+};
+
 const shardText = new Map();
 const readShard = (dir, key) => {
   const path = join(index, dir, `${hexName(key)}.json`);
   if (!shardText.has(path)) shardText.set(path, readFileSync(path, 'utf8'));
   return shardText.get(path);
 };
+
 const manifestOf = (dir) => {
   const raw = JSON.parse(readFileSync(join(index, dir, 'index.json'), 'utf8'));
-  return { prefixes: new Set(raw.prefixes), maxLen: raw.maxLen, total: raw.total };
-};
-
-let failures = 0;
-const fail = (msg) => {
-  if (failures++ < 15) console.error('FAIL', msg);
+  const text = readFileSync(join(index, dir, 'prefixes.txt'), 'utf8');
+  // The same membership test the Worker uses; it must agree with index.json.
+  const has = (p) => text.includes(`\n${p}\n`);
+  if (text !== '\n' + raw.prefixes.join('\n') + '\n') fail(`${dir}: prefixes.txt differs from index.json`);
+  for (const p of raw.prefixes) if (!has(p)) fail(`${dir}: prefix "${p}" not found by the text test`);
+  return { has, maxLen: MAX_PREFIX, total: raw.total };
 };
 
 for (const dialect of ['ku', 'sor', 'zza']) {
@@ -51,7 +57,7 @@ for (const dialect of ['ku', 'sor', 'zza']) {
   if (total !== m.total) fail(`${dialect}: manifest total ${m.total} != source ${total}`);
   let checked = 0;
   for (const [word, expected] of byWord) {
-    const key = shardKey(m.prefixes, m.maxLen, word);
+    const key = shardKey(m.has, m.maxLen, word);
     if (key === null) {
       fail(`${dialect}: no shard for "${word}"`);
       continue;
@@ -70,7 +76,7 @@ for (const dialect of ['ku', 'sor', 'zza']) {
   const reverse = JSON.parse(readFileSync(join(src, 'ar-reverse-index.json'), 'utf8'));
   let checked = 0;
   for (const [key, value] of Object.entries(reverse)) {
-    const shard = shardKey(m.prefixes, m.maxLen, key);
+    const shard = shardKey(m.has, m.maxLen, key);
     if (shard === null) {
       fail(`ar: no shard for "${key}"`);
       continue;

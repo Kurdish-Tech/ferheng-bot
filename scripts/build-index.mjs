@@ -3,7 +3,8 @@
 //   node scripts/build-index.mjs --src <ferheng public/data dir> --out <output dir>
 //
 // Input:  {ku,sor,zza}/<letter>-<n>.json (arrays of entries) and ar-reverse-index.json
-// Output: <out>/{ku,sor,zza,ar}/index.json plus one <hex-prefix>.json per shard.
+// Output: <out>/{ku,sor,zza,ar}/ with one <hex-prefix>.json per shard, plus
+//         prefixes.txt (what the Worker reads) and index.json (counts, for tooling).
 // Entries are re-serialised with JSON.stringify so every one starts with
 // {"word":"...", exactly as the Worker's text search expects.
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
@@ -14,7 +15,7 @@ const arg = (name) => {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? null : process.argv[i + 1];
 };
-const src = arg('src');
+const src = arg('src') || process.env.FERHENG_DATA;
 const out = arg('out');
 if (!src || !out) {
   console.error('Usage: node scripts/build-index.mjs --src <public/data> --out <dir>');
@@ -35,8 +36,12 @@ function writeShards(dir, shards, open, close, extra) {
     biggest = Math.max(biggest, Buffer.byteLength(body));
     writeFileSync(join(out, dir, `${hexName(prefix)}.json`), body);
   }
-  const manifest = { ...extra, maxLen: MAX_PREFIX, prefixes: [...shards.keys()].sort() };
-  writeFileSync(join(out, dir, 'index.json'), JSON.stringify(manifest));
+  const prefixes = [...shards.keys()].sort();
+  if (prefixes.some((p) => p.includes('\n'))) throw new Error(`${dir}: a shard prefix contains a newline`);
+  writeFileSync(join(out, dir, 'index.json'), JSON.stringify({ ...extra, maxLen: MAX_PREFIX, prefixes }));
+  // One prefix per line, wrapped in newlines: the Worker tests membership with
+  // text.includes("\n" + prefix + "\n") and never parses the list.
+  writeFileSync(join(out, dir, 'prefixes.txt'), '\n' + prefixes.join('\n') + '\n');
   return { shards: shards.size, biggest };
 }
 
@@ -72,4 +77,4 @@ writeFileSync(
     '<p>License: <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>. ' +
     'Attribution: Wiktionary contributors and Kurdish-Tech. Share alike.</p>'
 );
-if (!existsSync(join(out, 'ku', 'index.json'))) process.exit(1);
+if (!existsSync(join(out, 'ku', 'prefixes.txt'))) process.exit(1);

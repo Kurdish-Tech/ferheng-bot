@@ -50,13 +50,14 @@ test('every word is found in exactly the shard shardKey points to, including exa
   const items = words.map((w) => item(w, 40));
   const shards = splitIntoShards(items, { limit: 100, maxPrefix: 4 });
   const prefixes = new Set(shards.keys());
+  const has = (p) => prefixes.has(p);
   assert.ok(shards.size > 1);
   for (const w of words) {
-    const key = shardKey(prefixes, 4, w);
+    const key = shardKey(has, 4, w);
     assert.ok(key, `no shard for ${w}`);
     assert.ok(shards.get(key).some((it) => it.word === w), `${w} missing from shard ${key}`);
   }
-  assert.equal(shardKey(prefixes, 4, 'zzz'), null);
+  assert.equal(shardKey(has, 4, 'zzz'), null);
 });
 
 test('shards stay under the limit when a split is possible', () => {

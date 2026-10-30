@@ -13,11 +13,16 @@ export const MAX_PREFIX = 8;
 export const hexName = (prefix) =>
   Array.from(prefix, (c) => c.codePointAt(0).toString(16)).join('-');
 
-export function shardKey(prefixSet, maxLen, text) {
+/**
+ * `has(prefix)` says whether a prefix is one of the shard keys. The Worker
+ * answers it with a plain text search of the published prefix list, so no
+ * big list ever has to be parsed.
+ */
+export function shardKey(has, maxLen, text) {
   const chars = Array.from(text.toLowerCase());
   for (let k = Math.min(chars.length, maxLen); k >= 1; k--) {
     const p = chars.slice(0, k).join('');
-    if (prefixSet.has(p)) return p;
+    if (has(p)) return p;
   }
   return null;
 }
