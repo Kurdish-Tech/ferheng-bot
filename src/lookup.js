@@ -1,0 +1,147 @@
+// Dictionary lookups straight against the published Ferheng data files.
+//
+// The data shards are minified JSON arrays of up to ~1.8MB. Workers on the
+// free plan get ~10ms of CPU per request, so parsing a whole shard is out;
+// instead we search the raw text and only JSON.parse the few entries found.
+// That is safe because every entry starts with `{"word":"` and a literal
+// `"word":"` can't occur inside a JSON string (its quotes would be escaped).
+import { DATA_BASE, candidateLetters } from './config.js';
+
+const textMemo = new Map();
+const MEMO_LIMIT = 8;
+const indexMemo = new Map();
+
+async function fetchText(url) {
+  const hit = textMemo.get(url);
+  if (hit !== undefined) {
+    textMemo.delete(url);
+    textMemo.set(url, hit);
+    return hit;
+  }
+  const res = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
+  const text = await res.text();
+  textMemo.set(url, text);
+  if (textMemo.size > MEMO_LIMIT) textMemo.delete(textMemo.keys().next().value);
+  return text;
+}
+
+async function getIndex(dialectKey) {
+  if (indexMemo.has(dialectKey)) return indexMemo.get(dialectKey);
+  const idx = JSON.parse(await fetchText(`${DATA_BASE}/${dialectKey}/index.json`));
+  indexMemo.set(dialectKey, idx);
+  return idx;
+}
+
+export function partOverlapsPrefix(part, prefix) {
+  const first = part.first.toLowerCase();
+  const last = part.last.toLowerCase();
+  return prefix <= last && prefix + '\uFFFF' >= first;
+}
+
+async function candidateParts(dialectKey, lower) {
+  const idx = await getIndex(dialectKey);
+  const parts = [];
+  for (const letter of candidateLetters(dialectKey, lower[0])) {
+    for (const part of idx.letters[letter] || []) {
+      if (partOverlapsPrefix(part, lower)) parts.push(part.file);
+    }
+  }
+  return parts;
+}
+
+/** All entries whose headword is exactly `word`, parsed from raw shard text. */
+export function extractEntries(text, word) {
+  const needle = `{"word":${JSON.stringify(word)},`;
+  const out = [];
+  let from = 0;
+  for (;;) {
+    const i = text.indexOf(needle, from);
+    if (i === -1) break;
+    const j = text.indexOf('},{"word":', i + 1);
+    const raw = j === -1 ? text.slice(i, text.lastIndexOf('}') + 1) : text.slice(i, j + 1);
+    try {
+      out.push(JSON.parse(raw));
+    } catch {
+      // A malformed slice is skipped rather than failing the whole lookup.
+    }
+    from = i + needle.length;
+  }
+  return out;
+}
+
+function caseVariants(word) {
+  const lower = word.toLowerCase();
+  const capital = lower.charAt(0).toUpperCase() + lower.slice(1);
+  return [...new Set([word, lower, capital])];
+}
+
+export async function findEntries(dialectKey, word) {
+  const lower = word.toLowerCase();
+  const files = await candidateParts(dialectKey, lower);
+  const texts = await Promise.all(files.map((f) => fetchText(`${DATA_BASE}/${dialectKey}/${f}`)));
+  const seen = new Set();
+  const found = [];
+  for (const text of texts) {
+    for (const variant of caseVariants(word)) {
+      for (const entry of extractEntries(text, variant)) {
+        const key = `${entry.word}|${entry.pos}|${(entry.glosses || [])[0] || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        found.push(entry);
+      }
+    }
+  }
+  return found;
+}
+
+/** Up to `limit` distinct headwords starting with `prefix` ("did you mean"). */
+export async function suggestWords(dialectKey, prefix, limit = 5) {
+  const lower = prefix.toLowerCase();
+  const files = await candidateParts(dialectKey, lower);
+  const needle = `{"word":${JSON.stringify(lower).slice(0, -1)}`;
+  const words = new Set();
+  for (const f of files) {
+    const text = await fetchText(`${DATA_BASE}/${dialectKey}/${f}`);
+    let from = 0;
+    while (words.size < limit) {
+      const i = text.indexOf(needle, from);
+      if (i === -1) break;
+      const start = i + '{"word":"'.length;
+      const end = text.indexOf('"', start);
+      const w = text.slice(start, end);
+      if (w && w !== lower) words.add(w);
+      from = end + 1;
+    }
+    if (words.size >= limit) break;
+  }
+  return [...words];
+}
+
+const ARABIC_RE = /[\u0600-\u06FF]/;
+export const looksArabicScript = (s) => ARABIC_RE.test(s);
+export const stripArabicDiacritics = (s) => s.replace(/[\u064B-\u0652\u0670\u0640]/g, '').trim();
+
+/** Arabic typed on an Arabic keyboard -> the Kurdish/Persian letter forms Sorani uses. */
+export const toSoraniLetters = (s) =>
+  s.replace(/[يى]/g, 'ی').replace(/ك/g, 'ک').replace(/ة/g, 'ە');
+
+/** Kurdish headwords whose Arabic equivalents include `arabicWord`. */
+export function extractReverse(text, key) {
+  const needle = `${JSON.stringify(key)}:[`;
+  const i = text.indexOf(needle);
+  if (i === -1) return [];
+  const start = i + needle.length - 1;
+  const end = text.indexOf(']', start);
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return [];
+  }
+}
+
+export async function findArabicMatches(arabicWord) {
+  const key = stripArabicDiacritics(arabicWord);
+  const text = await fetchText(`${DATA_BASE}/ar-reverse-index.json`);
+  return extractReverse(text, key);
+}
