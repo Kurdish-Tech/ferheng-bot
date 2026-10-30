@@ -1,12 +1,13 @@
 // One-time setup after `npm run deploy`:
 //   npm run setup -- https://ferheng-kurdi-bot.<your-subdomain>.workers.dev
 //
-// Asks for the bot token (hidden, never written to disk or Cloudflare), then
+// Asks for the bot token (hidden, never written to disk), then
 //   1. checks the token with Telegram's getMe,
-//   2. generates a random webhook secret and stores it as a Worker secret,
+//   2. stores the token (BOT_TOKEN, used only to stop the button spinner via
+//      answerCallbackQuery) and a random WEBHOOK_SECRET as Worker secrets,
 //   3. points the bot's webhook at the Worker,
 //   4. sets the bot's commands and descriptions.
-// The Worker itself never needs the token: it answers through the webhook reply.
+// Messages are answered through the webhook reply itself; the token is only used for answerCallbackQuery.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
@@ -72,11 +73,12 @@ console.log(`Token OK — bot is @${me.username}`);
 
 const secret = randomBytes(24).toString('hex');
 await putSecret('WEBHOOK_SECRET', secret);
+await putSecret('BOT_TOKEN', token);
 
 await telegram(token, 'setWebhook', {
   url: `${workerUrl}/webhook`,
   secret_token: secret,
-  allowed_updates: ['message', 'inline_query'],
+  allowed_updates: ['message', 'callback_query', 'inline_query'],
   drop_pending_updates: true,
 });
 console.log('Webhook set.');

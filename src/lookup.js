@@ -76,14 +76,14 @@ function caseVariants(word) {
   return [...new Set([word, lower, capital])];
 }
 
-export async function findEntries(dialectKey, word) {
+export async function findEntries(dialectKey, word, { exactCase = false } = {}) {
   const lower = word.toLowerCase();
   const files = await candidateParts(dialectKey, lower);
   const texts = await Promise.all(files.map((f) => fetchText(`${DATA_BASE}/${dialectKey}/${f}`)));
   const seen = new Set();
   const found = [];
   for (const text of texts) {
-    for (const variant of caseVariants(word)) {
+    for (const variant of exactCase ? [lower] : caseVariants(word)) {
       for (const entry of extractEntries(text, variant)) {
         const key = `${entry.word}|${entry.pos}|${(entry.glosses || [])[0] || ''}`;
         if (seen.has(key)) continue;
@@ -144,4 +144,74 @@ export async function findArabicMatches(arabicWord) {
   const key = stripArabicDiacritics(arabicWord);
   const text = await fetchText(`${DATA_BASE}/ar-reverse-index.json`);
   return extractReverse(text, key);
+}
+
+// Letters Kurdish orthographies use that plain Arabic does not (Sorani-specific).
+const KURDISH_LETTERS_RE = /[ڕڵۆێەپچگکیژڤھ]/;
+export const hasKurdishLetters = (s) => KURDISH_LETTERS_RE.test(s);
+
+// People often type Kurmancî/Zazakî without the special letters (kurdi for
+// kurdî). These are the plain letters that have a special counterpart.
+const SPECIAL = {
+  ku: { c: 'ç', e: 'ê', i: 'î', s: 'ş', u: 'û' },
+  zza: { c: 'ç', e: 'ê', i: 'î', s: 'ş', u: 'ü' },
+};
+const MAX_FUZZY_POSITIONS = 4;
+
+/**
+ * Spelling variants of `word` with some plain letters swapped for their
+ * special forms, fewest changes first (grouped by number of changes) so a
+ * caller can stop at the first level that finds anything. Capped at 2^4 - 1
+ * variants to keep CPU use bounded.
+ */
+export function accentVariants(dialectKey, word) {
+  const map = SPECIAL[dialectKey];
+  if (!map) return [];
+  const chars = [...word.toLowerCase()];
+  const positions = chars.map((c, i) => (map[c] ? i : -1)).filter((i) => i >= 0).slice(0, MAX_FUZZY_POSITIONS);
+  const levels = [];
+  for (let mask = 1; mask < 1 << positions.length; mask++) {
+    const out = [...chars];
+    let bits = 0;
+    positions.forEach((p, k) => {
+      if (mask & (1 << k)) {
+        out[p] = map[chars[p]];
+        bits++;
+      }
+    });
+    (levels[bits] ||= []).push(out.join(''));
+  }
+  return levels.filter(Boolean);
+}
+
+/** Exact lookup; if nothing matches, retry with accents restored. */
+export async function findEntriesWithAccents(dialectKey, word, { skipDirect = false } = {}) {
+  if (!skipDirect) {
+    const direct = await findEntries(dialectKey, word);
+    if (direct.length) return { entries: direct, corrected: null };
+  }
+  for (const level of accentVariants(dialectKey, word)) {
+    const lists = await Promise.all(level.map((v) => findEntries(dialectKey, v, { exactCase: true })));
+    const hit = lists.findIndex((l) => l.length);
+    if (hit !== -1) return { entries: lists[hit], corrected: level[hit] };
+  }
+  return { entries: [], corrected: null };
+}
+
+/** A random {d, w} from the Arabic reverse index — words that have an Arabic translation. */
+export async function randomTranslatedWord() {
+  const text = await fetchText(`${DATA_BASE}/ar-reverse-index.json`);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const start = Math.floor(Math.random() * Math.max(1, text.length - 200));
+    const i = text.indexOf('{"d":"', start);
+    if (i === -1) continue;
+    const j = text.indexOf('}', i);
+    try {
+      const m = JSON.parse(text.slice(i, j + 1));
+      if (m.d && m.w) return m;
+    } catch {
+      // try another position
+    }
+  }
+  return { d: 'ku', w: 'av' };
 }

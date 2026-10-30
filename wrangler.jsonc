@@ -2,5 +2,11 @@
   "name": "ferheng-kurdi-bot",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
-  "workers_dev": true
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "PREFS",
+      "id": "b4fc6b53dcbd4b44b5c7cbaf8832bca8"
+    }
+  ]
 }
