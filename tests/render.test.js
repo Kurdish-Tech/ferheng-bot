@@ -38,6 +38,17 @@ test('word without Arabic equivalents says so in Arabic UI, silently in Kurdish 
   assert.doesNotMatch(renderWord({ dialect: 'ku', groups: g, ui: 'k' }).text, /tune ye|لا توجد/);
 });
 
+test('non-Arabic values in arabic_equivalents are never shown as Arabic', () => {
+  const only = [{ dialect: 'ku', entries: [{ word: 'di gel rêzgirtinê', glosses: ['x'], arabic_equivalents: ['kind regards', 'your sincerely'] }] }];
+  const t1 = renderWord({ dialect: 'ku', groups: only, ui: 'a' }).text;
+  assert.doesNotMatch(t1, /kind regards/);
+  assert.match(t1, /لا توجد ترجمة عربية/);
+  const mixed = [{ dialect: 'ku', entries: [{ word: 'antîkxane', glosses: ['x'], arabic_equivalents: ['թանգարան', 'متحف'] }] }];
+  const t2 = renderWord({ dialect: 'ku', groups: mixed, ui: 'a' }).text;
+  assert.match(t2, /بالعربية:<\/b> متحف/);
+  assert.doesNotMatch(t2, /թանգարան/);
+});
+
 test('dialect tabs appear only when several dialects have the word; language toggle flips', () => {
   const b = buttons(renderWord({ dialect: 'ku', groups, ui: 'a' }));
   assert.ok(b.some((x) => x.text.startsWith('● ')));

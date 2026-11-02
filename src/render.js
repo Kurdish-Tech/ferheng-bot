@@ -33,6 +33,8 @@ function summarize(entries) {
   const synonyms = new Set();
   for (const e of entries) {
     for (const a of e.arabic_equivalents || []) {
+      // The source data has a few non-Arabic values here (English, Armenian); never show them as Arabic.
+      if (!/\p{Script=Arabic}/u.test(a)) continue;
       const key = stripArabicDiacritics(a);
       if (!seen.has(key)) {
         seen.add(key);
